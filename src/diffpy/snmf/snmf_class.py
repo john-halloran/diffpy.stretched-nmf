@@ -1,8 +1,9 @@
 import cvxpy as cp
 import numpy as np
-from plotter import SNMFPlotter
 from scipy.optimize import minimize
 from scipy.sparse import coo_matrix, diags
+
+from diffpy.snmf.plotter import SNMFPlotter
 
 
 class SNMFOptimizer:
@@ -625,7 +626,7 @@ class SNMFOptimizer:
         Updates matrix A using constrained optimization (equivalent to fmincon in MATLAB).
         """
 
-        # Flatten A for compatibility with the optimizer (since SciPy expects 1D input)
+        # Flatten A for compatibility with the optimizer (since SciPy expects 1D inputs)
         stretch_flat_initial = self.stretch.flatten()
 
         # Define the optimization function
