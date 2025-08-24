@@ -9,9 +9,10 @@ from diffpy.snmf.plotter import SNMFPlotter
 class SNMFOptimizer:
     """An implementation of stretched NMF (sNMF), including sparse stretched NMF.
 
-    Instantiating the SNMFOptimizer class runs all the analysis immediately.
-    The results matrices can then be accessed as instance attributes
-    of the class (components, weights, and stretch).
+    Instantiating the SNMFOptimizer class prepares initial guesses and sets up the
+    optimization. It can then be run using fit().
+    The results matrices can be accessed as instance attributes
+    of the class (components_, weights_, and stretch_).
 
     For more information on sNMF, please reference:
     Gu, R., Rakita, Y., Lan, L. et al. Stretched non-negative matrix factorization.
@@ -22,13 +23,13 @@ class SNMFOptimizer:
     source_matrix : ndarray
         The original, unmodified data to be decomposed and later, compared against.
         Shape is (length_of_signal, number_of_signals).
-    stretch : ndarray
+    stretch_ : ndarray
         The best guess (or while running, the current guess) for the stretching
         factor matrix.
-    components : ndarray
+    components_ : ndarray
         The best guess (or while running, the current guess) for the matrix of
         component intensities.
-    weights : ndarray
+    weights_ : ndarray
         The best guess (or while running, the current guess) for the matrix of
         component weights.
     rho : float
@@ -68,8 +69,6 @@ class SNMFOptimizer:
         init_weights=None,
         init_components=None,
         init_stretch=None,
-        rho=0,
-        eta=0,
         max_iter=500,
         min_iter=20,
         tol=5e-7,
@@ -77,7 +76,7 @@ class SNMFOptimizer:
         random_state=None,
         show_plots=False,
     ):
-        """Initialize an instance of SNMF and run the optimization.
+        """Initialize an instance of sNMF.
 
         Parameters
         ----------
@@ -94,14 +93,6 @@ class SNMFOptimizer:
                 0, 1e-3, size=(self.n_components, self.n_signals)
             The initial guesses for the stretching factor for each component, at each
             condition (for each signal). Shape is (number_of_components, number_of_signals).
-        rho : float Optional  Default = 0
-            The stretching factor that influences the decomposition. Zero corresponds to no
-            stretching present. Relatively insensitive and typically adjusted in powers of 10.
-        eta : int Optional  Default = 0
-            The sparsity factor that influences the decomposition. Should be set to zero for
-            non-sparse data such as PDF. Can be used to improve results for sparse data such
-            as XRD, but due to instability, should be used only after first selecting the
-            best value for rho. Suggested adjustment is by powers of 2.
         max_iter : int Optional Default = 500
             The maximum number of times to update each of A, X, and Y before stopping
             the optimization.
@@ -120,10 +111,9 @@ class SNMFOptimizer:
         """
 
         self.source_matrix = source_matrix
-        self.rho = rho
-        self.eta = eta
         self.tol = tol
         self.max_iter = max_iter
+        self.min_iter = min_iter
         # Capture matrix dimensions
         self.signal_length, self.n_signals = source_matrix.shape
         self.num_updates = 0
@@ -142,49 +132,83 @@ class SNMFOptimizer:
         # Initialize weights and determine number of components
         if init_weights is None:
             self.n_components = n_components
-            self.weights = self._rng.beta(a=2.0, b=2.0, size=(self.n_components, self.n_signals))
+            self.weights_ = self._rng.beta(a=2.0, b=2.0, size=(self.n_components, self.n_signals))
         else:
             self.n_components = init_weights.shape[0]
-            self.weights = init_weights
+            self.weights_ = init_weights
 
         # Initialize stretching matrix if not provided
         if init_stretch is None:
-            self.stretch = np.ones((self.n_components, self.n_signals)) + self._rng.normal(
+            self.stretch_ = np.ones((self.n_components, self.n_signals)) + self._rng.normal(
                 0, 1e-3, size=(self.n_components, self.n_signals)
             )
         else:
-            self.stretch = init_stretch
+            self.stretch_ = init_stretch
 
         # Initialize component matrix if not provided
         if init_components is None:
-            self.components = self._rng.random((self.signal_length, self.n_components))
+            self.components_ = self._rng.random((self.signal_length, self.n_components))
         else:
-            self.components = init_components
+            self.components_ = init_components
 
         # Enforce non-negativity in our initial guesses
-        self.components = np.maximum(0, self.components)
-        self.weights = np.maximum(0, self.weights)
+        self.components_ = np.maximum(0, self.components_)
+        self.weights_ = np.maximum(0, self.weights_)
+
+        # Store the initial components, weights, and stretch
+        self.init_components = self.components_.copy()
+        self.init_weights = self.weights_.copy()
+        self.init_stretch = self.stretch_.copy()
 
         # Second-order spline: Tridiagonal (-2 on diagonal, 1 on sub/superdiagonals)
         self._spline_smooth_operator = 0.25 * diags(
             [1, -2, 1], offsets=[0, 1, 2], shape=(self.n_signals - 2, self.n_signals)
         )
 
+    def fit(self, rho=0, eta=0, reset=True):
+        """Run the sNMF optimization with the given parameters, using the setup from __init__.
+
+        Parameters
+        ----------
+        rho : float Optional  Default = 0
+            The stretching factor that influences the decomposition. Zero corresponds to no
+            stretching present. Relatively insensitive and typically adjusted in powers of 10.
+        eta : int Optional  Default = 0
+            The sparsity factor that influences the decomposition. Should be set to zero for
+            non-sparse data such as PDF. Can be used to improve results for sparse data such
+            as XRD, but due to instability, should be used only after first selecting the
+            best value for rho. Suggested adjustment is by powers of 2.
+        reset : boolean Optional  Default = True
+            Whether to return to the initial set of components_, weights_, and stretch_ before
+            running the optimization. When set to False, sequential calls to fit() will use the
+            output of the previous fit() as their input.
+        """
+
+        if reset:
+            self.components_ = self.init_components.copy()
+            self.weights_ = self.init_weights.copy()
+            self.stretch_ = self.init_stretch.copy()
+
+        self.rho = rho
+        self.eta = eta
+
         # Set up residual matrix, objective function, and history
         self.residuals = self.get_residual_matrix()
         self.objective_function = self.get_objective_function()
         self.best_objective = self.objective_function
-        self.best_matrices = [self.components.copy(), self.weights.copy(), self.stretch.copy()]
+        self.best_matrices = [self.components_.copy(), self.weights_.copy(), self.stretch_.copy()]
         self.objective_difference = None
         self._objective_history = [self.objective_function]
 
         # Set up tracking variables for update_components()
         self._prev_components = None
-        self._grad_components = np.zeros_like(self.components)
-        self._prev_grad_components = np.zeros_like(self.components)
+        self._grad_components = np.zeros_like(self.components_)
+        self._prev_grad_components = np.zeros_like(self.components_)
 
-        regularization_term = 0.5 * rho * np.linalg.norm(self._spline_smooth_operator @ self.stretch.T, "fro") ** 2
-        sparsity_term = eta * np.sum(np.sqrt(self.components))  # Square root penalty
+        regularization_term = (
+            0.5 * self.rho * np.linalg.norm(self._spline_smooth_operator @ self.stretch_.T, "fro") ** 2
+        )
+        sparsity_term = self.eta * np.sum(np.sqrt(self.components_))  # Square root penalty
         print(
             f"Start, Objective function: {self.objective_function:.5e}"
             f", Obj - reg/sparse: {self.objective_function - regularization_term - sparsity_term:.5e}"
@@ -196,9 +220,9 @@ class SNMFOptimizer:
             self.outer_loop()
             # Print diagnostics
             regularization_term = (
-                0.5 * rho * np.linalg.norm(self._spline_smooth_operator @ self.stretch.T, "fro") ** 2
+                0.5 * self.rho * np.linalg.norm(self._spline_smooth_operator @ self.stretch_.T, "fro") ** 2
             )
-            sparsity_term = eta * np.sum(np.sqrt(self.components))  # Square root penalty
+            sparsity_term = self.eta * np.sum(np.sqrt(self.components_))  # Square root penalty
             print(
                 f"Obj fun: {self.objective_function:.5e}, "
                 f"Obj - reg/sparse: {self.objective_function - regularization_term - sparsity_term:.5e}, "
@@ -206,27 +230,29 @@ class SNMFOptimizer:
             )
 
             # Convergence check: Stop if diffun is small and at least min_iter iterations have passed
-            print("Checking if ", self.objective_difference, " < ", self.objective_function * tol)
-            if self.objective_difference < self.objective_function * tol and outiter >= min_iter:
+            print("Checking if ", self.objective_difference, " < ", self.objective_function * self.tol)
+            if self.objective_difference < self.objective_function * self.tol and outiter >= self.min_iter:
                 break
 
         self.normalize_results()
 
+        return self
+
     def normalize_results(self):
         # Select our best results for normalization
-        self.components = self.best_matrices[0]
-        self.weights = self.best_matrices[1]
-        self.stretch = self.best_matrices[2]
+        self.components_ = self.best_matrices[0]
+        self.weights_ = self.best_matrices[1]
+        self.stretch_ = self.best_matrices[2]
 
         # Normalize weights/stretch first
-        weights_row_max = np.max(self.weights, axis=1, keepdims=True)
-        self.weights = self.weights / weights_row_max
-        stretch_row_max = np.max(self.stretch, axis=1, keepdims=True)
-        self.stretch = self.stretch / stretch_row_max
+        weights_row_max = np.max(self.weights_, axis=1, keepdims=True)
+        self.weights_ = self.weights_ / weights_row_max
+        stretch_row_max = np.max(self.stretch_, axis=1, keepdims=True)
+        self.stretch_ = self.stretch_ / stretch_row_max
 
         # effectively just re-running with component updates only vs normalized weights/stretch
-        self._grad_components = np.zeros_like(self.components)  # Gradient of X (zeros for now)
-        self._prev_grad_components = np.zeros_like(self.components)  # Previous gradient of X (zeros for now)
+        self._grad_components = np.zeros_like(self.components_)  # Gradient of X (zeros for now)
+        self._prev_grad_components = np.zeros_like(self.components_)  # Previous gradient of X (zeros for now)
         self.residuals = self.get_residual_matrix()
         self.objective_function = self.get_objective_function()
         self.objective_difference = None
@@ -244,9 +270,9 @@ class SNMFOptimizer:
             self.objective_difference = self._objective_history[-2] - self._objective_history[-1]
             if self.plotter is not None:
                 self.plotter.update(
-                    components=self.components,
-                    weights=self.weights,
-                    stretch=self.stretch,
+                    components=self.components_,
+                    weights=self.weights_,
+                    stretch=self.stretch_,
                     update_tag="normalize components",
                 )
             if self.objective_difference < self.objective_function * self.tol and outiter >= 7:
@@ -264,10 +290,13 @@ class SNMFOptimizer:
             self.objective_difference = self._objective_history[-2] - self._objective_history[-1]
             if self.objective_function < self.best_objective:
                 self.best_objective = self.objective_function
-                self.best_matrices = [self.components.copy(), self.weights.copy(), self.stretch.copy()]
+                self.best_matrices = [self.components_.copy(), self.weights_.copy(), self.stretch_.copy()]
             if self.plotter is not None:
                 self.plotter.update(
-                    components=self.components, weights=self.weights, stretch=self.stretch, update_tag="components"
+                    components=self.components_,
+                    weights=self.weights_,
+                    stretch=self.stretch_,
+                    update_tag="components",
                 )
 
             self.update_weights()
@@ -278,10 +307,10 @@ class SNMFOptimizer:
             self.objective_difference = self._objective_history[-2] - self._objective_history[-1]
             if self.objective_function < self.best_objective:
                 self.best_objective = self.objective_function
-                self.best_matrices = [self.components.copy(), self.weights.copy(), self.stretch.copy()]
+                self.best_matrices = [self.components_.copy(), self.weights_.copy(), self.stretch_.copy()]
             if self.plotter is not None:
                 self.plotter.update(
-                    components=self.components, weights=self.weights, stretch=self.stretch, update_tag="weights"
+                    components=self.components_, weights=self.weights_, stretch=self.stretch_, update_tag="weights"
                 )
 
             self.objective_difference = self._objective_history[-2] - self._objective_history[-1]
@@ -296,10 +325,10 @@ class SNMFOptimizer:
         self.objective_difference = self._objective_history[-2] - self._objective_history[-1]
         if self.objective_function < self.best_objective:
             self.best_objective = self.objective_function
-            self.best_matrices = [self.components.copy(), self.weights.copy(), self.stretch.copy()]
+            self.best_matrices = [self.components_.copy(), self.weights_.copy(), self.stretch_.copy()]
         if self.plotter is not None:
             self.plotter.update(
-                components=self.components, weights=self.weights, stretch=self.stretch, update_tag="stretch"
+                components=self.components_, weights=self.weights_, stretch=self.stretch_, update_tag="stretch"
             )
 
     def get_residual_matrix(self, components=None, weights=None, stretch=None):
@@ -318,11 +347,11 @@ class SNMFOptimizer:
         """
 
         if components is None:
-            components = self.components
+            components = self.components_
         if weights is None:
-            weights = self.weights
+            weights = self.weights_
         if stretch is None:
-            stretch = self.stretch
+            stretch = self.stretch_
 
         reconstructed_matrix = reconstruct_matrix(components, weights, stretch)
         residuals = reconstructed_matrix - self.source_matrix
@@ -333,10 +362,10 @@ class SNMFOptimizer:
         if residuals is None:
             residuals = self.residuals
         if stretch is None:
-            stretch = self.stretch
+            stretch = self.stretch_
         residual_term = 0.5 * np.linalg.norm(residuals, "fro") ** 2
         regularization_term = 0.5 * self.rho * np.linalg.norm(self._spline_smooth_operator @ stretch.T, "fro") ** 2
-        sparsity_term = self.eta * np.sum(np.sqrt(self.components))  # Square root penalty
+        sparsity_term = self.eta * np.sum(np.sqrt(self.components_))  # Square root penalty
         # Final objective function value
         function = residual_term + regularization_term + sparsity_term
         return function
@@ -349,11 +378,11 @@ class SNMFOptimizer:
         """
 
         if components is None:
-            components = self.components
+            components = self.components_
         if weights is None:
-            weights = self.weights
+            weights = self.weights_
         if stretch is None:
-            stretch = self.stretch
+            stretch = self.stretch_
 
         # Compute scaled indices
         stretch_flat = stretch.reshape(1, self.n_signals * self.n_components) ** -1
@@ -428,9 +457,9 @@ class SNMFOptimizer:
         """
 
         if stretch is None:
-            stretch = self.stretch
+            stretch = self.stretch_
         if weights is None:
-            weights = self.weights
+            weights = self.weights_
         if residuals is None:
             residuals = self.residuals
 
@@ -546,36 +575,36 @@ class SNMFOptimizer:
         ).toarray()  # toarray equivalent of full, make non-sparse
 
         # Compute initial step size `initial_step_size`
-        initial_step_size = np.linalg.eigvalsh(self.weights.T @ self.weights).max() * np.max(
-            [self.stretch.max(), 1 / self.stretch.min()]
+        initial_step_size = np.linalg.eigvalsh(self.weights_.T @ self.weights_).max() * np.max(
+            [self.stretch_.max(), 1 / self.stretch_.min()]
         )
         # Compute adaptive step size `step_size`
         if self.outiter == 0 and self.iter == 0:
             step_size = initial_step_size
         else:
             num = np.sum(
-                (self._grad_components - self._prev_grad_components) * (self.components - self._prev_components)
+                (self._grad_components - self._prev_grad_components) * (self.components_ - self._prev_components)
             )  # Element-wise multiplication
-            denom = np.linalg.norm(self.components - self._prev_components, "fro") ** 2  # Frobenius norm squared
+            denom = np.linalg.norm(self.components_ - self._prev_components, "fro") ** 2  # Frobenius norm squared
             step_size = num / denom if denom > 0 else initial_step_size
             if step_size <= 0:
                 step_size = initial_step_size
 
         # Store our old X before updating because it is used in step selection
-        self._prev_components = self.components.copy()
+        self._prev_components = self.components_.copy()
 
         while True:  # iterate updating components
             components_step = self._prev_components - self._grad_components / step_size
             # Solve x^3 + p*x + q = 0 for the largest real root
-            self.components = np.square(cubic_largest_real_root(-components_step, self.eta / (2 * step_size)))
+            self.components_ = np.square(cubic_largest_real_root(-components_step, self.eta / (2 * step_size)))
             # Mask values that should be set to zero
             mask = (
-                self.components**2 * step_size / 2
-                - step_size * self.components * components_step
-                + self.eta * np.sqrt(self.components)
+                self.components_**2 * step_size / 2
+                - step_size * self.components_ * components_step
+                + self.eta * np.sqrt(self.components_)
                 < 0
             )
-            self.components = mask * self.components
+            self.components_ = mask * self.components_
 
             objective_improvement = self._objective_history[-1] - self.get_objective_function(
                 residuals=self.get_residual_matrix()
@@ -598,26 +627,26 @@ class SNMFOptimizer:
         sample_indices = np.arange(self.signal_length)
         for signal in range(self.n_signals):
             # Stretch factors for this signal across components:
-            this_stretch = self.stretch[:, signal]
+            this_stretch = self.stretch_[:, signal]
             # Build stretched_comps[:, k] by interpolating component at frac. pos. index / this_stretch[comp]
-            stretched_comps = np.empty((self.signal_length, self.n_components), dtype=self.components.dtype)
+            stretched_comps = np.empty((self.signal_length, self.n_components), dtype=self.components_.dtype)
             for comp in range(self.n_components):
                 pos = sample_indices / this_stretch[comp]
                 stretched_comps[:, comp] = np.interp(
                     pos,
                     sample_indices,
-                    self.components[:, comp],
-                    left=self.components[0, comp],
-                    right=self.components[-1, comp],
+                    self.components_[:, comp],
+                    left=self.components_[0, comp],
+                    right=self.components_[-1, comp],
                 )
 
             # Solve quadratic problem for a given signal and update its weight
             new_weight = self.solve_quadratic_program(t=stretched_comps, m=signal)
-            self.weights[:, signal] = new_weight
+            self.weights_[:, signal] = new_weight
 
     def regularize_function(self, stretch=None):
         if stretch is None:
-            stretch = self.stretch
+            stretch = self.stretch_
 
         stretched_components, d_stretch_comps, dd_stretch_comps = self.apply_interpolation_matrix(stretch=stretch)
         intermediate = stretched_components.flatten(order="F").reshape(
@@ -644,11 +673,11 @@ class SNMFOptimizer:
         """
 
         # Flatten stretch for compatibility with the optimizer (since SciPy expects 1D input)
-        stretch_flat_initial = self.stretch.flatten()
+        stretch_flat_initial = self.stretch_.flatten()
 
         # Define the optimization function
         def objective(stretch_vec):
-            stretch_matrix = stretch_vec.reshape(self.stretch.shape)  # Reshape back to matrix form
+            stretch_matrix = stretch_vec.reshape(self.stretch_.shape)  # Reshape back to matrix form
             fun, gra = self.regularize_function(stretch_matrix)
             gra = gra.flatten()
             return fun, gra
@@ -666,7 +695,7 @@ class SNMFOptimizer:
         )
 
         # Update stretch with the optimized values
-        self.stretch = result.x.reshape(self.stretch.shape)
+        self.stretch_ = result.x.reshape(self.stretch_.shape)
 
 
 def cubic_largest_real_root(p, q):
