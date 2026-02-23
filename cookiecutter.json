@@ -1,7 +1,9 @@
 {
-  "maintainer_name": "Simon Billinge",
-  "maintainer_email": "sb2896@columbia.edu",
-  "maintainer_github_username": "sbillinge",
+  "author_names": "John Halloran",
+  "author_emails": "jwh2180@columbia.edu",
+  "maintainer_names": "Simon Billinge",
+  "maintainer_emails": "sbillinge@columbia.edu",
+  "maintainer_github_usernames": "sbillinge",
   "contributors": "Simon Billinge, John Halloran, Billinge Group members",
   "license_holders": "The Trustees of Columbia University in the City of New York",
   "project_name": "diffpy.stretched-nmf",
