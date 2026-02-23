@@ -6,10 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "diffpy.stretched-nmf"
 dynamic=['version', 'dependencies']
 authors = [
-  { name="Simon Billinge", email="sb2896@columbia.edu" },
+  { name="Simon Billinge", email="sbillinge@ucsb.edu" },
 ]
 maintainers = [
-  { name="Simon Billinge", email="sb2896@columbia.edu" },
+  { name="Simon Billinge", email="sbillinge@ucsb.edu" },
 ]
 description = "A python package implementing the stretched NMF algorithm."
 keywords = ['diffraction', 'PDF', 'x-ray', 'mapping']
