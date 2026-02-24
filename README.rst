@@ -135,7 +135,7 @@ Before contributing, please read our `Code of Conduct <https://github.com/diffpy
 Contact
 -------
 
-For more information on diffpy.stretched-nmf please visit the project `web-page <https://diffpy.github.io/>`_ or email Simon Billinge at sb2896@columbia.edu.
+For more information on diffpy.stretched-nmf please visit the project `web-page <https://diffpy.github.io/>`_ or email Simon Billinge at sbillinge@ucsb.edu.
 
 Acknowledgements
 ----------------
