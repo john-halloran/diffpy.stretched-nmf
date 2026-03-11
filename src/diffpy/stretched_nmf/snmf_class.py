@@ -210,6 +210,7 @@ class SNMFOptimizer:
             the output of the previous
             fit() as their input.
         """
+        self.converged_ = False
 
         if reset:
             self.components_ = self.init_components.copy()
@@ -251,11 +252,12 @@ class SNMFOptimizer:
         sparsity_term = self.eta * np.sum(
             np.sqrt(self.components_)
         )  # Square root penalty
+        obj_diff = (
+            self.objective_function - regularization_term - sparsity_term
+        )
         print(
             f"Start, Objective function: {self.objective_function:.5e}"
-            f", Obj - reg/sparse: {self.objective_function
-                                   - regularization_term
-                                   - sparsity_term:.5e}"
+            f", Obj - reg/sparse: {obj_diff:.5e}"
         )
 
         # Main optimization loop
@@ -274,11 +276,12 @@ class SNMFOptimizer:
             sparsity_term = self.eta * np.sum(
                 np.sqrt(self.components_)
             )  # Square root penalty
+            obj_diff = (
+                self.objective_function - regularization_term - sparsity_term
+            )
             print(
                 f"Obj fun: {self.objective_function:.5e}, "
-                f"Obj - reg/sparse: {self.objective_function
-                                     - regularization_term
-                                     - sparsity_term:.5e}, "
+                f", Obj - reg/sparse: {obj_diff:.5e}"
                 f"Iter: {self.outiter}"
             )
 
@@ -294,6 +297,7 @@ class SNMFOptimizer:
                 self.objective_difference < self.objective_function * self.tol
                 and outiter >= self.min_iter
             ):
+                self.converged_ = True
                 break
 
         self.normalize_results()
